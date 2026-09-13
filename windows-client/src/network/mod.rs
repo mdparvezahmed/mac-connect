@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -57,6 +59,11 @@ impl NetworkClient {
 
     pub fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::Relaxed)
+    }
+
+    pub fn disconnect(&self) {
+        *self.target_addr.write() = None;
+        self.is_connected.store(false, Ordering::Relaxed);
     }
 
     fn start_background_worker(&self) {

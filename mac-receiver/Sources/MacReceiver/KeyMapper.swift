@@ -75,13 +75,11 @@ public class KeyMapper {
         case 0xA3:       // Control (Right)
             return swapCmdAndCtrl ? 0x36 /* Command */ : 0x3E /* Control */
 
-        case 0x12, 0xA4: return 0x3A // Alt / Option (Left)
-        case 0xA5:       return 0x3D // Alt / Option (Right)
+        case 0x12, 0xA4: return 0x37 // Alt / Option (Left) -> Mapped to Mac Command (⌘)
+        case 0xA5:       return 0x36 // Alt / Option (Right) -> Mapped to Mac Command (⌘)
 
-        case 0x5B:       // Left Win Key
-            return swapCmdAndCtrl ? 0x3B /* Control */ : 0x37 /* Command */
-        case 0x5C:       // Right Win Key
-            return swapCmdAndCtrl ? 0x3E /* Control */ : 0x36 /* Command */
+        case 0x5B:       return 0x3A // Left Win Key -> Mapped to Mac Option (⌥)
+        case 0x5C:       return 0x3D // Right Win Key -> Mapped to Mac Option (⌥)
 
         case 0x14: return 0x39 // Caps Lock
 

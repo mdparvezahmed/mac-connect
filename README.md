@@ -1,57 +1,36 @@
 # 🖥️ MacConnect
 
-Zero-latency hardware & network bridge to control your **Mac Mini** from your **Windows PC/Laptop** using a USB Video Capture Card for instant video display and UDP for keyboard, mouse, and trackpad input streaming.
+High-performance remote control suite for your **Mac Mini** from your **Windows PC/Laptop**.
 
-```
-d:\Code\mac-connect\
-├── windows-client/          # Windows Client App (Rust + egui/DirectShow/MediaFoundation)
-└── mac-receiver/            # macOS Receiver Daemon (Native Swift + CoreGraphics CGEvent)
-```
+- **Primary / Default Mode**: 🌐 **Native macOS VNC (Wireless)** – Connects directly to Apple's built-in Screen Sharing service with zero cables required.
+- **Hardware Mode**: 🔌 **USB Video Capture Card (HDMI)** – Zero-latency HDMI capture card pipeline.
 
 ---
 
-## ⚡ Quick Start Guide
+## ⚡ Quick Start: Native macOS VNC Mode (Default)
 
-### 1. Setup Mac Mini (`mac-receiver/`)
-1. Copy the `mac-receiver` folder to your Mac Mini.
-2. In Terminal on your Mac:
-   ```bash
-   cd ~/mac-receiver
-   swift build -c release
-   ./.build/release/MacReceiver
-   ```
-3. When prompted, enable **Accessibility Permission** under **System Settings $\rightarrow$ Privacy & Security $\rightarrow$ Accessibility**.
+### 1. One-time Setup on Mac Mini
+1. Open **System Settings $\rightarrow$ General $\rightarrow$ Sharing**.
+2. Toggle **ON** **Screen Sharing**.
+3. Click the **(i)** info icon $\rightarrow$ toggle **ON** **"VNC viewers may control screen with password"** $\rightarrow$ set a password.
 4. Note your Mac Mini's local IP address (e.g. `192.168.1.50`).
 
-### 2. Setup Windows Laptop (`windows-client/`)
-1. Connect HDMI cable from Mac Mini to your USB Capture Card.
-2. Plug the USB Capture Card into your Windows PC.
-3. Launch the compiled client executable:
+### 2. Connect from Windows Laptop
+1. Launch the compiled executable:
    ```powershell
    d:\Code\mac-connect\windows-client\target\release\mac-connect-client.exe
    ```
-4. Select your **Capture Device** from the top dropdown.
-5. Enter your Mac Mini's IP address.
+2. Enter your Mac Mini's **IP Address** and **VNC Password**.
+3. Click **🟢 Connect**.
+4. Press **`F11`** for borderless fullscreen display.
 
 ---
 
-## 🎮 How to Control
+## 🎮 Shortcuts & Controls
 
-- **Click inside the video window**: Locks your mouse cursor inside the Mac screen and activates input streaming.
-- **`Ctrl + Alt`** or **`F12`**: Instantly releases cursor focus back to Windows.
+- **`Click inside Screen`**: Locks focus to the Mac (mouse & keystrokes stream directly to Mac).
+- **`Esc`** or **`Ctrl + Alt`** or **`F12`**: **Instantly unlocks** mouse & keyboard back to Windows.
 - **`F11`**: Toggle borderless fullscreen display.
 - **`F10`**: Show / hide the top settings bar.
-
----
-
-## ⌨️ Default Key Mappings
-
-| Windows Key | Mac Mini Mapping |
-| :--- | :--- |
-| **Windows Key** | **Command (`⌘`)** |
-| **Alt Key** | **Option (`⌥`)** |
-| **Ctrl Key** | **Control (`⌃`)** |
-| **2-Finger Touchpad Scroll** | **macOS Continuous Pixel Scroll** |
-| **F1 – F12** | **Mac Function Keys (`F1 – F12`)** |
-
-*(To swap `Ctrl` and `Cmd` for PC muscle memory copy/paste, run `./.build/release/MacReceiver --swap-cmd-ctrl` on your Mac).*
+- **`Alt + C` / `Alt + V`**: Native Mac Copy / Paste (`⌘C` / `⌘V`).
+- **`2-Finger Touchpad Scroll`**: Seamless continuous macOS scrolling.

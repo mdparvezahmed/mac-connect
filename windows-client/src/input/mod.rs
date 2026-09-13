@@ -171,12 +171,12 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
             return CallNextHookEx(KEYBOARD_HOOK, code, wparam, lparam);
         }
 
-        // When locked, stream keystrokes to Mac
+        // When locked, stream keystrokes to Mac (Swapped: Alt is Command ⌘, Win is Option ⌥)
         let mut modifiers = ModifierFlags::new();
         modifiers.set_shift(IS_SHIFT_DOWN);
         modifiers.set_ctrl(IS_CTRL_DOWN);
-        modifiers.set_alt(IS_ALT_DOWN);
-        modifiers.set_win(IS_WIN_DOWN);
+        modifiers.set_alt(IS_WIN_DOWN);   // Win key becomes Option (⌥)
+        modifiers.set_win(IS_ALT_DOWN);   // Alt key becomes Command (⌘)
 
         let action = if is_down { KeyAction::KeyDown } else { KeyAction::KeyUp };
         let pkt = PacketSerializer::key_event(vk, action, modifiers);
