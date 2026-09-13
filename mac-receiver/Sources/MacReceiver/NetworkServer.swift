@@ -6,6 +6,9 @@ public class NetworkServer {
     private var isRunning = false
     private var socketFd: Int32 = -1
     private var workerThread: Thread?
+    private var loggedFirstPacket = false
+    private var loggedFirstPong = false
+    private var loggedBadPacket = false
 
     public init(port: UInt16, inputInjector: InputInjector) {
         self.port = port
@@ -64,6 +67,14 @@ public class NetworkServer {
         }
     }
 
+    /// Renders a client address as "ip:port" for logging.
+    private func describe(_ addr: sockaddr_in) -> String {
+        var copy = addr
+        var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &copy.sin_addr, &text, socklen_t(INET_ADDRSTRLEN))
+        return "\(String(cString: text)):\(UInt16(bigEndian: copy.sin_port))"
+    }
+
     private func receiveLoop() {
         var buffer = [UInt8](repeating: 0, count: 1024)
         var clientAddr = sockaddr_in()
@@ -81,8 +92,17 @@ public class NetworkServer {
                 continue
             }
 
+            if !loggedFirstPacket {
+                loggedFirstPacket = true
+                print("\u{1F4E5} First packet received from \(describe(clientAddr)) (\(bytesRead) bytes)")
+            }
+
             let data = Data(bytes: buffer, count: bytesRead)
             guard let packet = PacketParser.parse(data: data) else {
+                if !loggedBadPacket {
+                    loggedBadPacket = true
+                    print("\u{26A0}\u{FE0F} Unrecognised packet from \(describe(clientAddr)), ignoring")
+                }
                 continue
             }
 
@@ -106,11 +126,23 @@ public class NetworkServer {
             case .ping(let timestamp):
                 // Send pong reply back to client
                 let pongData = PacketParser.createPong(timestamp: timestamp)
-                _ = pongData.withUnsafeBytes { rawBuffer in
+                let sent = pongData.withUnsafeBytes { rawBuffer in
                     withUnsafePointer(to: &clientAddr) {
                         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                             sendto(socketFd, rawBuffer.baseAddress, pongData.count, 0, $0, addrLen)
                         }
+                    }
+                }
+
+                // Report the first reply either way. A ping that arrives but
+                // whose pong cannot leave the machine is the signature of the
+                // Local Network privacy gate, and is otherwise invisible.
+                if !loggedFirstPong {
+                    loggedFirstPong = true
+                    if sent < 0 {
+                        print("\u{274C} Ping from \(describe(clientAddr)) arrived but the pong failed to send (errno \(errno))")
+                    } else {
+                        print("\u{1F517} Linked - answered ping from \(describe(clientAddr))")
                     }
                 }
 

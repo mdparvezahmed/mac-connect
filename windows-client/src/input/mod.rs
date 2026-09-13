@@ -4,15 +4,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use parking_lot::RwLock;
 
-use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    VK_CONTROL, VK_ESCAPE, VK_F12, VK_LCONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_PAUSE,
-    VK_RCONTROL, VK_RMENU, VK_RWIN, VK_SCROLL, VK_SHIFT,
+    VK_CONTROL, VK_ESCAPE, VK_F12, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
+    VK_PAUSE, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, ClipCursor, DispatchMessageW, GetCursorInfo, GetCursorPos,
-    GetMessageW, SetCursorPos, SetWindowsHookExW, ShowCursor, UnhookWindowsHookEx,
-    CURSORINFO, CURSOR_SHOWING, HHOOK, KBDLLHOOKSTRUCT,
+    CallNextHookEx, ClipCursor, DispatchMessageW, GetClientRect, GetCursorInfo,
+    GetCursorPos, GetForegroundWindow, GetMessageW, SetCursorPos, SetWindowsHookExW,
+    ShowCursor, UnhookWindowsHookEx, CURSORINFO, CURSOR_SHOWING, HHOOK, KBDLLHOOKSTRUCT,
     MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
@@ -34,8 +35,13 @@ static mut KEYBOARD_HOOK: HHOOK = std::ptr::null_mut();
 static mut MOUSE_HOOK: HHOOK = std::ptr::null_mut();
 
 // Internal state tracking
+// Where the cursor is pinned while locked. Kept away from the screen edges so a
+// fast swipe always has room to produce a delta.
 static mut LOCK_CENTER_X: i32 = 0;
 static mut LOCK_CENTER_Y: i32 = 0;
+// Where the cursor was when the user handed control over, so we can put it back.
+static mut RESTORE_X: i32 = 0;
+static mut RESTORE_Y: i32 = 0;
 static mut IS_CTRL_DOWN: bool = false;
 static mut IS_ALT_DOWN: bool = false;
 static mut IS_SHIFT_DOWN: bool = false;
@@ -62,11 +68,20 @@ impl InputManager {
 
         unsafe {
             if locked {
-                // Capture cursor position as the lock anchor point
+                // Remember where the user was, so the cursor comes back there.
                 let mut pt: POINT = std::mem::zeroed();
                 GetCursorPos(&mut pt);
-                LOCK_CENTER_X = pt.x;
-                LOCK_CENTER_Y = pt.y;
+                RESTORE_X = pt.x;
+                RESTORE_Y = pt.y;
+
+                // Pin to the middle of our window instead of the click point.
+                // Movement is measured as a delta from the pin, and Windows
+                // clamps the cursor at the screen edge - anchoring near an edge
+                // silently swallows every movement heading that way.
+                let (cx, cy) = foreground_window_center().unwrap_or((pt.x, pt.y));
+                LOCK_CENTER_X = cx;
+                LOCK_CENTER_Y = cy;
+                SetCursorPos(LOCK_CENTER_X, LOCK_CENTER_Y);
             } else {
                 // Release cursor clip confinement
                 ClipCursor(std::ptr::null());
@@ -77,8 +92,8 @@ impl InputManager {
                 // while locked we swallow every move, so the window toolkit is left
                 // holding stale pointer state and will not re-show or re-position
                 // the cursor until the pointer physically leaves the window.
-                SetCursorPos(LOCK_CENTER_X + 1, LOCK_CENTER_Y);
-                SetCursorPos(LOCK_CENTER_X, LOCK_CENTER_Y);
+                SetCursorPos(RESTORE_X + 1, RESTORE_Y);
+                SetCursorPos(RESTORE_X, RESTORE_Y);
 
                 // Reset internal modifier key tracker state
                 IS_CTRL_DOWN = false;
@@ -127,6 +142,31 @@ impl InputManager {
                 }
             }
         });
+    }
+}
+
+/// Screen-space center of the foreground window's client area.
+fn foreground_window_center() -> Option<(i32, i32)> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let mut rect: RECT = std::mem::zeroed();
+        if GetClientRect(hwnd, &mut rect) == 0 {
+            return None;
+        }
+
+        let mut origin = POINT {
+            x: (rect.right - rect.left) / 2,
+            y: (rect.bottom - rect.top) / 2,
+        };
+        if ClientToScreen(hwnd, &mut origin) == 0 {
+            return None;
+        }
+
+        Some((origin.x, origin.y))
     }
 }
 
@@ -179,7 +219,10 @@ unsafe extern "system" fn ll_keyboard_proc(code: i32, wparam: WPARAM, lparam: LP
         match vk {
             VK_CONTROL | VK_LCONTROL | VK_RCONTROL => IS_CTRL_DOWN = is_down,
             VK_MENU | VK_LMENU | VK_RMENU => IS_ALT_DOWN = is_down,
-            VK_SHIFT => IS_SHIFT_DOWN = is_down,
+            // A low-level hook reports the *sided* shift key, never VK_SHIFT,
+            // so matching on VK_SHIFT alone left the flag permanently false and
+            // nothing typed on the Mac ever came out capitalised.
+            VK_SHIFT | VK_LSHIFT | VK_RSHIFT => IS_SHIFT_DOWN = is_down,
             VK_LWIN | VK_RWIN => IS_WIN_DOWN = is_down,
             _ => {}
         }

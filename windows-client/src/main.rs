@@ -15,6 +15,9 @@ use network::NetworkClient;
 use video::{VideoCaptureManager, VideoDeviceInfo, VideoFrame};
 use vnc::{keysym, VncManager, VncState};
 
+/// UDP port the MacReceiver listens on by default.
+const DEFAULT_CAPTURE_PORT: u16 = 12345;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClientMode {
     Vnc,
@@ -52,6 +55,7 @@ struct MacConnectApp {
     is_fullscreen: bool,
     last_vnc_dim: (u32, u32),
     cursor_hidden_by_us: bool,
+    link_error: Option<String>,
 }
 
 impl MacConnectApp {
@@ -61,7 +65,11 @@ impl MacConnectApp {
         let vnc_frame_rx = vnc_mgr.get_frame_receiver();
 
         // Initialize Capture Card Engine (Default)
-        let network = NetworkClient::new().expect("Failed to initialize UDP network client");
+        // Auto-discovery starts immediately: the client broadcasts on the LAN
+        // and links itself to whichever MacReceiver answers, so the common case
+        // needs no IP typed in at all.
+        let network = NetworkClient::new(DEFAULT_CAPTURE_PORT)
+            .expect("Failed to initialize UDP network client");
         let input_mgr = InputManager::new(network.clone());
         input_mgr.start_hooks();
 
@@ -103,8 +111,8 @@ impl MacConnectApp {
             capture_frame_rx,
             devices,
             selected_device,
-            capture_ip: "192.168.1.".to_string(),
-            capture_port: "12345".to_string(),
+            capture_ip: String::new(),
+            capture_port: DEFAULT_CAPTURE_PORT.to_string(),
 
             show_settings: true,
             video_texture: None,
@@ -114,6 +122,7 @@ impl MacConnectApp {
             is_fullscreen: false,
             last_vnc_dim: (0, 0),
             cursor_hidden_by_us: false,
+            link_error: None,
         }
     }
 
@@ -193,6 +202,16 @@ impl eframe::App for MacConnectApp {
         // lags a frame behind an auto-unlock.
         let is_capture_locked = self.input_mgr.is_locked();
         self.sync_cursor_visibility(is_capture_locked);
+
+        // Show whichever Mac auto-discovery latched onto, without fighting the
+        // user for the text box while they are typing an address themselves.
+        if ctx.memory(|m| m.focused()).is_none() {
+            if let Some(ip) = self.network.target_ip() {
+                if self.capture_ip != ip {
+                    self.capture_ip = ip;
+                }
+            }
+        }
 
         // Top Navigation & Configuration Bar
         if self.show_settings {
@@ -333,9 +352,35 @@ impl eframe::App for MacConnectApp {
                                 }
                             } else {
                                 if ui.button("🟢 Link").clicked() || enter_pressed {
-                                    if let Ok(p) = self.capture_port.parse::<u16>() {
-                                        let _ = self.network.set_target(&self.capture_ip, p);
-                                    }
+                                    let port = self.capture_port.parse::<u16>().ok();
+                                    let ok = match port {
+                                        Some(p) => self.network.set_target(&self.capture_ip, p),
+                                        None => false,
+                                    };
+                                    self.link_error = if ok {
+                                        None
+                                    } else {
+                                        Some(format!(
+                                            "\"{}:{}\" is not a valid address",
+                                            self.capture_ip.trim(),
+                                            self.capture_port.trim()
+                                        ))
+                                    };
+                                }
+
+                                if self.network.is_discovering() {
+                                    ui.label("🔍 Searching LAN...");
+                                } else if ui.button("🔍 Auto").clicked() {
+                                    self.network.disconnect();
+                                    let port = self.capture_port
+                                        .parse::<u16>()
+                                        .unwrap_or(DEFAULT_CAPTURE_PORT);
+                                    self.network.set_auto_discover(true, port);
+                                    self.link_error = None;
+                                }
+
+                                if let Some(ref err) = self.link_error {
+                                    ui.colored_label(Color32::from_rgb(255, 90, 90), err);
                                 }
                             }
 
@@ -535,8 +580,26 @@ impl eframe::App for MacConnectApp {
 
                     ClientMode::CaptureCard => {
                         let response = ui.allocate_rect(rect, egui::Sense::click());
-                        if response.clicked() && !is_capture_locked {
-                            self.input_mgr.set_locked(true);
+
+                        // Locking with nowhere to send input just swallows the
+                        // mouse and looks like a freeze, so gate it on the link.
+                        if self.network.is_connected() {
+                            if response.clicked() && !is_capture_locked {
+                                self.input_mgr.set_locked(true);
+                            }
+                        } else if self.video_texture.is_some() {
+                            let hint = if self.network.is_discovering() {
+                                "🔍 Searching the network for MacReceiver..."
+                            } else {
+                                "⚠ Not linked - enter the Mac IP and click Link to control the Mac"
+                            };
+                            ui.painter().text(
+                                egui::pos2(rect.center().x, rect.bottom() - 24.0),
+                                egui::Align2::CENTER_BOTTOM,
+                                hint,
+                                egui::FontId::proportional(15.0),
+                                Color32::from_rgb(255, 200, 90),
+                            );
                         }
                     }
                 }
