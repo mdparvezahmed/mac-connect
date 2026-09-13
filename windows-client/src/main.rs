@@ -419,27 +419,40 @@ impl eframe::App for MacConnectApp {
             });
         }
 
-        // Handle Global Shortcuts
-        ctx.input(|i| {
-            if i.key_pressed(egui::Key::F10) {
-                self.show_settings = !self.show_settings;
-            }
-            if i.key_pressed(egui::Key::F11) {
-                self.is_fullscreen = !self.is_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
-            }
-
-            // Universal Host Escape Keys: Esc, Ctrl+Alt, F12 unlocks both VNC and Capture modes!
+        // Handle Global Shortcuts.
+        //
+        // Sample the keys first, then act. `ctx.input()` holds the egui Context
+        // lock for the whole closure, so calling anything that reaches back into
+        // ctx from inside it - `send_viewport_cmd` re-enters the same lock -
+        // deadlocks the UI thread permanently, which froze the whole app the
+        // instant F11 was pressed.
+        let (toggle_settings, toggle_fullscreen, release_input) = ctx.input(|i| {
+            // Universal Host Escape Keys: Esc, Ctrl+Alt, F12 release both modes.
             let is_ctrl_alt = i.modifiers.ctrl && i.modifiers.alt;
-            if i.key_pressed(egui::Key::Escape) || is_ctrl_alt || i.key_pressed(egui::Key::F12) {
-                if self.vnc_is_locked {
-                    self.vnc_is_locked = false;
-                }
-                if self.input_mgr.is_locked() {
-                    self.input_mgr.set_locked(false);
-                }
-            }
+            (
+                i.key_pressed(egui::Key::F10),
+                i.key_pressed(egui::Key::F11),
+                i.key_pressed(egui::Key::Escape)
+                    || is_ctrl_alt
+                    || i.key_pressed(egui::Key::F12),
+            )
         });
+
+        if toggle_settings {
+            self.show_settings = !self.show_settings;
+        }
+
+        if toggle_fullscreen {
+            self.is_fullscreen = !self.is_fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+        }
+
+        if release_input {
+            self.vnc_is_locked = false;
+            if self.input_mgr.is_locked() {
+                self.input_mgr.set_locked(false);
+            }
+        }
 
         // Main Display Viewport
         egui::CentralPanel::default()
