@@ -51,6 +51,7 @@ struct MacConnectApp {
     current_fps: u32,
     is_fullscreen: bool,
     last_vnc_dim: (u32, u32),
+    cursor_hidden_by_us: bool,
 }
 
 impl MacConnectApp {
@@ -112,6 +113,7 @@ impl MacConnectApp {
             current_fps: 0,
             is_fullscreen: false,
             last_vnc_dim: (0, 0),
+            cursor_hidden_by_us: false,
         }
     }
 
@@ -149,6 +151,28 @@ impl MacConnectApp {
             self.last_frame_time = Instant::now();
         }
     }
+
+    /// Hides the Windows cursor while the Mac owns the pointer, and brings it
+    /// straight back the moment control is released.
+    ///
+    /// We talk to Win32 directly instead of using `egui::CursorIcon::None`: the
+    /// low-level hooks swallow the very mouse events winit relies on to keep its
+    /// cached cursor state in sync, so winit would skip the "show it again" call
+    /// and leave the pointer invisible over our window until it wandered out.
+    /// Called once per frame from the UI thread, which is the thread that owns
+    /// the cursor display counter.
+    fn sync_cursor_visibility(&mut self, hide: bool) {
+        if hide {
+            // Re-assert on every frame something else turned the cursor back on.
+            if !self.cursor_hidden_by_us || input::os_cursor_is_showing() {
+                input::force_os_cursor_visible(false);
+                self.cursor_hidden_by_us = true;
+            }
+        } else if self.cursor_hidden_by_us {
+            input::force_os_cursor_visible(true);
+            self.cursor_hidden_by_us = false;
+        }
+    }
 }
 
 impl eframe::App for MacConnectApp {
@@ -156,18 +180,19 @@ impl eframe::App for MacConnectApp {
         self.update_video_texture(ctx);
         ctx.request_repaint_after(Duration::from_millis(16));
 
-        let is_capture_locked = self.input_mgr.is_locked();
-
         // Safety: Auto-unlock if the application window loses focus
         let is_window_focused = ctx.input(|i| i.raw.focused);
         if !is_window_focused {
-            if is_capture_locked {
+            if self.input_mgr.is_locked() {
                 self.input_mgr.set_locked(false);
             }
-            if self.vnc_is_locked {
-                self.vnc_is_locked = false;
-            }
+            self.vnc_is_locked = false;
         }
+
+        // Read the lock state *after* the focus check so the cursor below never
+        // lags a frame behind an auto-unlock.
+        let is_capture_locked = self.input_mgr.is_locked();
+        self.sync_cursor_visibility(is_capture_locked);
 
         // Top Navigation & Configuration Bar
         if self.show_settings {

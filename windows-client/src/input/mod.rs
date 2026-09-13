@@ -10,8 +10,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RCONTROL, VK_RMENU, VK_RWIN, VK_SCROLL, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, SetCursorPos,
-    SetWindowsHookExW, ShowCursor, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
+    CallNextHookEx, ClipCursor, DispatchMessageW, GetCursorInfo, GetCursorPos,
+    GetMessageW, SetCursorPos, SetWindowsHookExW, ShowCursor, UnhookWindowsHookEx,
+    CURSORINFO, CURSOR_SHOWING, HHOOK, KBDLLHOOKSTRUCT,
     MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
@@ -61,25 +62,31 @@ impl InputManager {
 
         unsafe {
             if locked {
-                // Get current cursor location in real screen pixels
+                // Capture cursor position as the lock anchor point
                 let mut pt: POINT = std::mem::zeroed();
                 GetCursorPos(&mut pt);
                 LOCK_CENTER_X = pt.x;
                 LOCK_CENTER_Y = pt.y;
-
-                // Hide cursor
-                ShowCursor(0);
             } else {
-                // Show cursor
-                ShowCursor(1);
+                // Release cursor clip confinement
+                ClipCursor(std::ptr::null());
 
-                // Reset internal key tracker
+                // Move cursor back to where it was when we locked, so it
+                // re-appears at a sensible position inside the window.
+                // The extra pixel hop forces Windows to emit a *real* WM_MOUSEMOVE:
+                // while locked we swallow every move, so the window toolkit is left
+                // holding stale pointer state and will not re-show or re-position
+                // the cursor until the pointer physically leaves the window.
+                SetCursorPos(LOCK_CENTER_X + 1, LOCK_CENTER_Y);
+                SetCursorPos(LOCK_CENTER_X, LOCK_CENTER_Y);
+
+                // Reset internal modifier key tracker state
                 IS_CTRL_DOWN = false;
                 IS_ALT_DOWN = false;
                 IS_SHIFT_DOWN = false;
                 IS_WIN_DOWN = false;
 
-                // Send reset modifiers packet to Mac
+                // Send reset modifiers packet to Mac so no stuck keys remain
                 let reset_pkt = PacketSerializer::reset_modifiers();
                 self.network.send(&reset_pkt);
             }
@@ -120,6 +127,34 @@ impl InputManager {
                 }
             }
         });
+    }
+}
+
+/// Reports whether Windows is actually drawing a cursor right now.
+pub fn os_cursor_is_showing() -> bool {
+    unsafe {
+        let mut info: CURSORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<CURSORINFO>() as u32;
+        GetCursorInfo(&mut info) != 0 && (info.flags & CURSOR_SHOWING) != 0
+    }
+}
+
+/// Drives the Win32 cursor display counter until the cursor really is shown/hidden.
+///
+/// `ShowCursor` keeps a *counter*, not a flag, and both winit and our own lock
+/// handling push it around, so a single paired call cannot undo an unbalanced one.
+/// Looping until the counter crosses zero makes this self-healing.
+///
+/// Must be called from the UI thread: the counter belongs to that thread's input
+/// queue, so hiding on the UI thread and showing from the hook thread leaves the
+/// cursor invisible over our own window while visible everywhere else.
+pub fn force_os_cursor_visible(visible: bool) {
+    unsafe {
+        if visible {
+            while ShowCursor(1) < 0 {}
+        } else {
+            while ShowCursor(0) >= 0 {}
+        }
     }
 }
 
